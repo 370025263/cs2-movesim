@@ -9,6 +9,14 @@ Plan formats:
 - ``dense``: one point per tick for the next ``dense_ticks`` ticks (the near part of a non-uniform trajectory);
 - ``sparse``: points only every ``replan`` ticks, linearly interpolated in between.
 
+State estimate (``estimate``): in a real game the controller does not read the true velocity. It keeps a belief state,
+advanced every tick by its own simulator (``belief_params``, may differ from the world's physics) with the keys it pressed,
+and reset at each replan to an external velocity estimate:
+- ``true``: the true velocity (upper bound);
+- ``noisy``: true velocity + isotropic Gaussian error of ``velocity_noise`` u/s (e.g. a model's velocity head);
+- ``plan``: the velocity the previous plan expected (the human's), i.e. no measurement at all;
+- ``dead``: never reset, own simulation only.
+
 Reported against the human, per tick: horizontal velocity error; speed while the human is shooting
 (attack held); time to stop (speed from above 150 to below 50) after the human starts a stop; final position drift.
 """
@@ -41,7 +49,8 @@ def plan_offsets(human_pos, t, horizon, mode, replan, shrink, noise, rng):
     return future
 
 
-def run(windows, mode="dense", replan=4, gain=8.0, shrink=0.0, noise=0.0, params=None, seed=0, allow_walk=True):
+def run(windows, mode="dense", replan=4, gain=8.0, shrink=0.0, noise=0.0, params=None, seed=0, allow_walk=True,
+        estimate="true", velocity_noise=0.0, belief_params=None):
     """windows: dict with pos [T+1, n, 3], yaw [T+1, n], buttons [T+1, n, 7], base [T+1, n], attack [T+1, n]
     (as saved by ``cs2movesim-pack``). Returns a dict of metrics and the simulated velocities [T, n, 2]."""
     params = params or MovementParams()
@@ -50,20 +59,30 @@ def run(windows, mode="dense", replan=4, gain=8.0, shrink=0.0, noise=0.0, params
     vel_h = windows["vel"]
     ticks, n = pos.shape[0] - 1, pos.shape[1]
     state = PlayerState.create(pos[0], vel_h[0, :, :2], duck=buttons[0, :, DUCK].astype(float))
-    controller = TrackingController(params, gain=gain, allow_walk=allow_walk)
+    belief_params = belief_params or params
+    controller = TrackingController(belief_params, gain=gain, allow_walk=allow_walk)
+    belief = state.copy()
     sim_vel = np.zeros((ticks, n, 2))
     plan, anchor, plan_t = None, None, 0
     for t in range(ticks):
         if t % replan == 0:
+            if estimate != "dead" or t == 0:
+                belief = state.copy()
+                if estimate == "noisy":
+                    belief.vel[:, :2] += rng.normal(0, velocity_noise / np.sqrt(2), size=(n, 2))
+                elif estimate == "plan" and t >= replan:
+                    belief.vel[:, :2] = (pos[t, :, :2] - pos[t - replan, :, :2]) * params.tick_rate / replan
+            belief.pos = state.pos.copy()
             horizon = min(max(replan * 2, 8), ticks - t)
             plan = plan_offsets(pos, t, horizon, mode, replan, shrink, noise, rng)
             anchor, plan_t = state.pos[:, :2].copy(), t
         j = t - plan_t
         now = anchor + (plan[:, j - 1] if j > 0 else 0.0)
         nxt = anchor + plan[:, j]
-        desired = controller.desired_velocity(state, np.concatenate([now, np.zeros((n, 1))], 1), np.concatenate([nxt, np.zeros((n, 1))], 1))
-        chosen = controller.choose(state, yaw[t], base[t], desired, duck=buttons[t, :, DUCK])
+        desired = controller.desired_velocity(belief, np.concatenate([now, np.zeros((n, 1))], 1), np.concatenate([nxt, np.zeros((n, 1))], 1))
+        chosen = controller.choose(belief, yaw[t], base[t], desired, duck=buttons[t, :, DUCK])
         step(state, chosen, yaw[t], base[t], params)
+        step(belief, chosen, yaw[t], base[t], belief_params)
         sim_vel[t] = state.vel[:, :2]
     human_vel = vel_h[1:, :, :2]
     err = np.linalg.norm(sim_vel - human_vel, axis=2)

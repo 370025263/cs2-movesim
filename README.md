@@ -51,6 +51,8 @@ cs2movesim sample --n 300 --seed 1 --out ticks/
 cs2movesim speeds ticks/                               # weapon max speeds
 cs2movesim replay ticks/ [--preset opencs2]            # open-loop replay of human inputs
 cs2movesim track  ticks/ [--mode sparse] [--noise 1]   # closed-loop tracking of human paths
+cs2movesim track  ticks/ --estimate noisy --velocity-noise 20   # ... when the controller only has a velocity estimate
+cs2movesim recoil ticks/ --out curves.json             # median spray compensation curves per weapon
 ```
 
 Windows are cut where the simulator applies: alive, flat ground, no jump, not defusing or planting, not pushing into
@@ -84,6 +86,44 @@ chooses keys tick by tick. Compared with the human:
 Reading: with a correct plan, a 16 Hz path plus this controller reproduces pro movement, including counter-strafes.
 Conservative (shrunk) plans are harmless; *jittery* plans are not: the next-step displacement error has to stay below
 about 0.5 game units (pros move about 13 units per 16 Hz step at full speed) or shots start being fired while moving.
+
+**Velocity estimate.** In a real game the controller cannot read its true velocity. With `--estimate` it keeps its own
+belief state, advanced every tick by its simulator (calibrated preset, while the world uses server defaults) with the keys
+it pressed, and reset every 4 ticks to an external velocity estimate (e.g. a velocity head of the model):
+
+| velocity source | velocity error median / p90 | drift after 2 s | shots fired >20 u/s faster than human |
+| --- | --- | --- | --- |
+| true velocity, same physics (reference) | 3.8 / 18.0 | 0.9 | 0% |
+| true velocity, mismatched internal physics | 4.6 / 20.7 | 1.4 | 0% |
+| estimate with 10 u/s error | 7.4 / 20.9 | 2.7 | 1% |
+| estimate with 20 u/s error | 11.1 / 26.0 | 4.7 | 5% |
+| estimate with 40 u/s error | 19.0 / 39.7 | 8.7 | 19% |
+| previous plan only | 6.9 / 24.6 | 5.6 | 3% |
+| own simulation only, never corrected | 5.9 / 22.4 | 2.9 | 1% |
+
+So a velocity estimate within 10 to 20 u/s is enough; it matters mostly where the own simulation is blind (walls, being
+slowed by hits), which this simulator does not model.
+
+## Spray compensation
+
+`cs2movesim recoil` measures, per firearm, the median cumulative view change since the trigger was pressed (AK-47 on 730
+sprays: 1.6, 5.3 and 8.1 degrees pulled down after 0.2, 0.4 and 0.6 s). `feedforward` turns it into per-tick increments
+for training labels (a model then predicts only the residual) and `SprayCompensator` adds it online while firing.
+
+On 251 AK-47 sprays, with the residual executed once per 4 ticks and smoothed within the step, aim error at the first 7
+shots (degrees; 0.35 is about half a head at 730 units):
+
+| model error on per-step view change | without compensation: median / >0.35 | with compensation: median / >0.35 |
+| --- | --- | --- |
+| none | 0.06 / 10% | 0.06 / 10% |
+| under-predicts by 10% | 0.52 / 63% | 0.23 / 34% |
+| under-predicts by 20% | 1.03 / 78% | 0.41 / 56% |
+| under-predicts by 50% | 2.50 / 90% | 0.97 / 81% |
+| 0.05 degree noise per step | 0.17 / 15% | 0.16 / 14% |
+| 0.1 degree noise per step | 0.29 / 40% | 0.28 / 39% |
+
+Compensation makes spraying about 2.5 times more tolerant of a model that under-predicts; random per-step noise still has
+to stay around 0.05 degrees.
 
 ## Limitations
 

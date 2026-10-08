@@ -4,6 +4,7 @@
     cs2movesim speeds ticks/                          # weapon max speeds measured from the sample
     cs2movesim replay ticks/ [--preset opencs2]       # open-loop replay of human inputs vs recorded velocity
     cs2movesim track ticks/ [--mode sparse --noise 1] # closed-loop tracking of human paths by the controller
+    cs2movesim recoil ticks/ --out curves.json        # median spray (recoil compensation) curves per weapon
 """
 import argparse
 import glob
@@ -71,10 +72,22 @@ def cmd_track(args):
     from .calibrate import pack_windows
     windows = pack_windows(load_rounds(args.dir), args.horizon, min_speed=60.0)
     metrics, _ = run(windows, mode=args.mode, replan=args.replan, gain=args.gain, shrink=args.shrink, noise=args.noise,
-                     params=preset(args.preset), seed=args.seed, allow_walk=not args.no_walk)
+                     params=preset(args.preset), seed=args.seed, allow_walk=not args.no_walk, estimate=args.estimate,
+                     velocity_noise=args.velocity_noise, belief_params=OPENCS2_FIT if args.estimate != "true" else None)
     print(f"{windows['pos'].shape[1]} windows of {args.horizon} ticks, plan={args.mode}, replan every {args.replan} ticks")
     for key, value in metrics.items():
         print(f"  {key:20s} {value:.3f}" if isinstance(value, float) else f"  {key:20s} {value}")
+
+
+def cmd_recoil(args):
+    from .recoil import estimate_spray_curves, save_curves
+    curves = estimate_spray_curves(load_rounds(args.dir), max_ticks=args.max_ticks, min_sprays=args.min_sprays)
+    save_curves(curves, args.out)
+    for weapon, curve in sorted(curves.items(), key=lambda kv: -kv[1]["sprays"]):
+        at = [curve["pitch"][t] for t in (13, 26, 38) if t < len(curve["pitch"])]
+        print(f"{weapon:16s} {curve['sprays']:5d} sprays, {len(curve['pitch']):3d} ticks, pitch pulled at 0.2/0.4/0.6 s: "
+              + ", ".join(f"{v:.2f}" for v in at))
+    print(f"saved {len(curves)} curves to {args.out}")
 
 
 def main(argv=None):
@@ -109,7 +122,16 @@ def main(argv=None):
     p.add_argument("--no-walk", action="store_true")
     p.add_argument("--preset", choices=["server", "opencs2"], default="server")
     p.add_argument("--seed", type=int, default=0)
+    p.add_argument("--estimate", choices=["true", "noisy", "plan", "dead"], default="true",
+                   help="where the controller's velocity comes from (see cs2movesim.bench)")
+    p.add_argument("--velocity-noise", type=float, default=0.0)
     p.set_defaults(func=cmd_track)
+    p = sub.add_parser("recoil", help="median spray compensation curves per weapon")
+    p.add_argument("dir")
+    p.add_argument("--out", required=True)
+    p.add_argument("--max-ticks", type=int, default=192)
+    p.add_argument("--min-sprays", type=int, default=30)
+    p.set_defaults(func=cmd_recoil)
     args = parser.parse_args(argv)
     args.func(args)
 
