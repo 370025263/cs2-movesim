@@ -34,7 +34,8 @@ def load_ticks(path):
     table = pd.read_parquet(path, columns=COLUMNS).sort_values("tick")
     ticks = np.arange(int(table.tick.iloc[0]), int(table.tick.iloc[-1]) + 1)
     present = np.isin(ticks, table.tick.values)
-    table = table.set_index("tick").reindex(ticks).ffill()
+    table = table.set_index("tick").reindex(ticks)
+    table = table.astype({c: "object" for c in ("active", "input_weapon") if c in table}).ffill().infer_objects()
     buttons = np.zeros((len(ticks), len(BUTTONS)), dtype=bool)
     attack = np.zeros(len(ticks), dtype=bool)
     use = np.zeros(len(ticks), dtype=bool)
@@ -53,7 +54,7 @@ def load_ticks(path):
         "tick": ticks, "buttons": buttons, "attack": attack, "use": use,
         "pitch": table.pitch.values.astype(np.float64),
         "yaw": np.degrees(np.unwrap(np.radians(table.yaw.values.astype(np.float64)))),
-        "weapon": table.input_weapon.astype(str).values, "alive": table.is_alive.astype(bool).values,
+        "weapon": table.input_weapon.astype(str).to_numpy(dtype=str), "alive": table.is_alive.astype(bool).to_numpy(),
         "pos": table[["x", "y", "z"]].values.astype(np.float64),
         "vel": table[["velocity_x", "velocity_y", "velocity_z"]].values.astype(np.float64),
         "present": present,

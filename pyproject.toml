@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cs2-movesim"
-version = "0.2.0"
+version = "0.2.1"
 description = "Tick-level Counter-Strike 2 movement simulator, trajectory-tracking controller and OpenCS2 calibration benchmarks"
 readme = "README.md"
 requires-python = ">=3.9"

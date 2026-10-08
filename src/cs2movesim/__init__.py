@@ -4,7 +4,7 @@ from .params import DEFAULT_SPEED, OPENCS2_FIT, WEAPON_SPEED, MovementParams, we
 from .physics import BUTTONS, PlayerState, simulate, step
 from .recoil import SprayCompensator, estimate_spray_curves, feedforward
 
-__version__ = "0.2.0"
+__version__ = "0.2.1"
 __all__ = ["BUTTONS", "DEFAULT_SPEED", "OPENCS2_FIT", "WEAPON_SPEED", "MovementParams", "PlayerState", "TrackingController",
            "SprayCompensator", "candidate_buttons", "estimate_spray_curves", "feedforward", "simulate", "step",
            "weapon_speed", "__version__"]
